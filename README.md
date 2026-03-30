@@ -1,4 +1,4 @@
-# Peregrine-KV (Production-lean Distributed KV)
+# Peregrine-KV (Lean Distributed KV)
 
 Peregrine-KV is a key-value store built around an LSM-tree style storage engine (WAL + MemTable + SSTables) and a distributed replication layer based on RAFT consensus. It exposes a gRPC API for client operations (`Put`, `Get`, `Delete`).
 
