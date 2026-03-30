@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package peregrinekv.cluster;
+
+option go_package = "github.com/Mayanshh/Peregrine-KV/internal/clusterpb;clusterpb";
+
+message VoteRequest {
+  string candidate_id = 1;
+  uint64 term = 2;
+  uint64 last_log_index = 3;
+  uint64 last_log_term = 4;
+}
+
+message VoteResponse {
+  uint64 term = 1;
+  bool vote_granted = 2;
+}
+
+message LogEntry {
+  uint64 term = 1;
+  bytes command = 2;
+}
+
+message AppendEntriesRequest {
+  string leader_id = 1;
+  uint64 term = 2;
+  uint64 prev_log_index = 3;
+  uint64 prev_log_term = 4;
+  repeated LogEntry entries = 5;
+  uint64 leader_commit = 6;
+}
+
+message AppendEntriesResponse {
+  uint64 term = 1;
+  bool success = 2;
+}
+
+service Raft {
+  rpc RequestVote(VoteRequest) returns (VoteResponse);
+  rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse);
+}

@@ -1,0 +1,45 @@
+version: "3.9"
+
+services:
+  n1:
+    build: .
+    command:
+      - "-data=/data/n1"
+      - "-raft=true"
+      - "-node-id=n1"
+      - "-raft-addr=0.0.0.0:25051"
+      - "-kv-addr=0.0.0.0:50051"
+      - "-peers=n2=n2:25052,n3=n3:25053"
+    ports:
+      - "50051:50051"
+    volumes:
+      - ./data/n1:/data/n1
+
+  n2:
+    build: .
+    command:
+      - "-data=/data/n2"
+      - "-raft=true"
+      - "-node-id=n2"
+      - "-raft-addr=0.0.0.0:25052"
+      - "-kv-addr=0.0.0.0:50052"
+      - "-peers=n1=n1:25051,n3=n3:25053"
+    ports:
+      - "50052:50052"
+    volumes:
+      - ./data/n2:/data/n2
+
+  n3:
+    build: .
+    command:
+      - "-data=/data/n3"
+      - "-raft=true"
+      - "-node-id=n3"
+      - "-raft-addr=0.0.0.0:25053"
+      - "-kv-addr=0.0.0.0:50053"
+      - "-peers=n1=n1:25051,n2=n2:25052"
+    ports:
+      - "50053:50053"
+    volumes:
+      - ./data/n3:/data/n3
+

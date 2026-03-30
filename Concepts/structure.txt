@@ -1,0 +1,19 @@
+Peregrine-KV/
+├── cmd/
+│   └── server/          # Entry point for the actual server
+│       └── main.go
+├── internal/            # Code that cannot be imported by other repositories
+│   ├── engine/          # The Coordinator (Ties it all together)
+│   │   ├── engine.go
+│   │   └── options.go   # Configuration structs (very important for prod)
+│   ├── memtable/        # In-Memory representations
+│   │   ├── skiplist.go  # (O(log n) concurrent reads/writes)
+│   │   └── memtable.go
+│   ├── sstable/         # Disk representations
+│   │   ├── builder.go   # Writes new SSTables
+│   │   ├── reader.go    # Reads existing SSTables (with Bloom Filters)
+│   │   └── manifest.go  # The "Master SSTable" tracker (Levels 0, 1, 2)
+│   └── wal/             # Write-Ahead Log
+│       └── segment.go   # Segmented WAL for faster rotation
+└── pkg/                 # Public utility libraries (can be reused)
+    └── logger/          # Custom structured logging

@@ -1,0 +1,250 @@
+Module 1: Optimized File I/O (for the Write-Ahead Log) and Concurrency Control (for the MemTable).
+
+Concept 1: The Write-Ahead Log (WAL) & Fast File I/O
+    The ELI5: Imagine you are a cashier at a super busy grocery store. If you stop to neatly file every single receipt into a giant filing cabinet (a traditional database), the line of customers will wrap around the block. Instead, you have a long receipt tape. Every time a customer buys something, you just print a new line at the very bottom of the tape. It’s incredibly fast because you never look backward; you only push forward. This is an Append-Only File, or a Write-Ahead Log (WAL).
+
+The Go Best Practice:
+    Beginners usually use (os.WriteFile) to save data. Never do this for a database. (os.WriteFile) loads the whole file, overwrites it, and closes it. It is incredibly slow. Instead, we keep a file open and only append (add to the bottom) using os.OpenFile.
+
+Here is the production-ready code you can drop into a wal.go file:
+
+```go code:
+
+package engine
+
+import (
+    "fmt"
+    "os"
+    "sync"
+)
+
+//WAL represents our Write-Ahead Log
+// We keep the file open so we don't pay the cost of opening/closing it on every write.
+
+ type WAL struct {
+    file *os.file
+    mu sync.Mutex
+ }
+
+// NewWAL creates or opens an existing WAL file safely.
+func NewWAL(filepath string) (*WAL, error){
+    // os.O_APPEND: Only write to the end of the file. (Super fast!)
+    // os.O_CREATE: If the file doesn't exist, make it.
+    // os.O_WRONLY: We are only writing right now, not reading.
+
+	// 0644: Standard file permissions (readable by others, writable by you).
+    file, err := os.OpenFile(filepath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644) 
+    if err != nil {
+        return nil, fmt.Errorf("Failed to open WAL:", err)
+    }
+    return &WAL{file:file}, nil
+}
+func main() {
+
+}
+
+```
+
+
+Concept 2: The MemTable & Concurrency (Mutexes)
+    The ELI5: The WAL is safe on the hard drive, but hard drives are slow to read from. So, every time we write to the WAL, we also write that data to a whiteboard in the cashier's booth (RAM). If a customer asks, "What did I just buy?", you look at the whiteboard instantly.
+
+However, imagine a web server where 1,000 users are hitting your API at the exact same time. It’s like 1,000 people trying to write on the same whiteboard simultaneously. Their markers will crash, and the text will be a garbled mess. This is a Race Condition. To fix this, we use a "speaking token" called a Mutex (Mutual Exclusion).
+
+The Go Best Practice:
+Go maps (map[string][]byte) are not thread-safe. If two goroutines write to a map at the same time, your entire Go server will panic and crash. We must protect the map with a sync.RWMutex. An RWMutex is smart: it lets 1,000 people read the whiteboard at the same time, but if someone needs to write, everyone else must wait for a fraction of a millisecond.
+
+```
+MemTable.go
+
+package engine
+
+import (
+    "sync"
+)
+// MemTable is our lightning-fast, in-memory cache.
+type MemTable struct{
+    //RWMutex allows multiple readers, but only one writer at a time
+    mu sync.RWMutex
+    data map[string][]byte
+}
+
+// NewMemtable initializes our map
+func NewMemtable() *MemTable {
+    return &MemTable{
+        data: make(map[string][]byte),
+    }
+}
+
+func (m *MemTable) Put(key string, value []byte){
+    // exclusive lock: nobody else can write now
+    m.mu.lock()
+    defer m.mu.Unlock()
+
+    m.data[key] = value
+}
+
+func (m *MemTable) Get(key string) ([]byte , bool){
+    m.mu.Rlock() // Read lock : enables others to read but no one can write right now
+    defer m.mu.RUnlock()
+
+    value,exists := m.data[key]
+    return value,exists
+}
+
+```
+
+
+We Have Built the "Hot Path." Data comes in, gets written safely to the WAL, and sits instantly accessible in the MemTable.
+But RAM is limited. If you keep pushing data into your map[string][]byte, your Go server will eventually consume all your laptop's memory and the OS will kill it.
+This brings us to Step 3: SSTables (Sorted String Tables) & Background Flushing.
+
+Concept 3: The SSTable (Sorted String Table)
+The ELI5: Imagine your MemTable whiteboard is completely full. You can't just throw it away, and you can't leave it there. So, you take a picture of the whiteboard, print it out, and put it in a filing cabinet.
+
+But there is a catch: if the filing cabinet is just a messy pile of papers, finding a specific customer's receipt later will take forever. So, before you put the paper in the cabinet, you alphabetize (sort) everything by the customer's name. Because it’s sorted, finding "Mayansh" later is incredibly fast (you can just skip to the 'M' section).
+
+Once a file is written to disk, it is Immutable—it can never be changed. If a user updates their data, you just write the new version to a new file.
+
+The Go Best Practice:
+To sort a Go map, we have to extract the keys into a slice ([]string), use Go's sort package, and then write them to a file.
+
+Here is sstable.go:
+```
+package engine
+
+import (
+	"encoding/binary"
+	"fmt"
+	"os"
+	"sort"
+)
+
+// FlushMemTableToDisk takes a full MemTable and writes it as an SSTable.
+// In a real system, we'd name this file something like "000001.sst".
+func FlushMemTableToDisk(filepath string, mem *MemTable) error {
+	// 1. We need to lock the MemTable for READING. 
+	// We don't want someone changing it while we are copying it to disk.
+	mem.mu.RLock()
+	defer mem.mu.RUnlock()
+
+	// 2. Extract and sort the keys
+	keys := make([]string, 0, len(mem.data))
+	for k := range mem.data {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys) // Alphabetize! This is what makes it an "SSTable"
+
+	// 3. Create a new file for our SSTable
+	// os.O_TRUNC means if the file exists, wipe it clean first.
+	file, err := os.OpenFile(filepath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to create SSTable: %w", err)
+	}
+	defer file.Close()
+
+	// 4. Write the sorted data to the file
+	for _, key := range keys {
+		val := mem.data[key]
+		
+		// Let's write the size of the key, the key itself, the size of the val, and the val.
+		// This makes reading it back MUCH faster than searching for newline characters.
+		
+		// Write Key Length (4 bytes)
+		keyLen := uint32(len(key))
+		binary.Write(file, binary.LittleEndian, keyLen)
+		// Write Key
+		file.WriteString(key)
+		
+		// Write Value Length (4 bytes)
+		valLen := uint32(len(val))
+		binary.Write(file, binary.LittleEndian, valLen)
+		// Write Value
+		file.Write(val)
+	}
+
+	// Force the OS to write it to the physical SSD right now.
+	return file.Sync()
+}
+```
+
+Concept 4: Background Workers (Goroutines & Channels)
+The ELI5: The process of sorting keys and saving a file takes time (maybe 10-50 milliseconds). If your main web server does this, any user trying to save data during that time will have to wait.
+
+Instead, Go allows you to hire a "background worker." You hand the full whiteboard to the worker, say "Hey, go put this in the filing cabinet," and you immediately grab a brand new, empty whiteboard to keep serving customers without pausing.
+
+The Go Best Practice:
+We use go to spawn a Goroutine (a lightweight thread). It takes the full MemTable and flushes it in the background while the main program continues.
+
+Let's look at how we tie everything together in a coordinator function:
+
+```
+package engine
+
+import (
+	"fmt"
+)
+
+// Engine is the main coordinator that holds our WAL and MemTable
+type Engine struct {
+	wal      *WAL
+	memTable *MemTable
+	
+	// A threshold to trigger a flush (e.g., 1000 items)
+	maxMemTableSize int 
+}
+
+// Put handles incoming user requests
+func (e *Engine) Put(key string, value []byte) error {
+	// 1. Write to WAL first (Durable)
+	err := e.wal.Append(key, value)
+	if err != nil {
+		return err
+	}
+
+	// 2. Write to MemTable (Fast)
+	e.memTable.Put(key, value)
+
+	// 3. Check if MemTable is full
+	// (In reality, we'd check byte size, but checking count is easier for now)
+	e.memTable.mu.RLock()
+	size := len(e.memTable.data)
+	e.memTable.mu.RUnlock()
+
+	if size >= e.maxMemTableSize {
+		e.triggerFlush()
+	}
+
+	return nil
+}
+
+func (e *Engine) triggerFlush() {
+	// 1. Grab the full MemTable
+	fullMemTable := e.memTable
+	
+	// 2. Instantly replace it with a new, empty one so users can keep writing
+	e.memTable = NewMemTable()
+
+	// 3. Close the old WAL and create a fresh one
+	e.wal.Close()
+	e.wal, _ = NewWAL("wal_new.log") // In reality, we'd generate a unique ID
+
+	// 4. Spawn a Goroutine! 
+	// The "go" keyword means: run this function in the background, don't wait for it to finish.
+	go func() {
+		// Create a unique filename for the SSTable based on a timestamp or counter
+		filename := fmt.Sprintf("data_%d.sst", 1) 
+		
+		err := FlushMemTableToDisk(filename, fullMemTable)
+		if err != nil {
+			fmt.Printf("Background flush failed: %v\n", err)
+			return
+		}
+		
+		fmt.Printf("Successfully flushed %s to disk!\n", filename)
+		
+		// Now that it is safely sorted on disk, we can delete the old WAL file!
+		// os.Remove("wal_old.log")
+	}()
+}
+```

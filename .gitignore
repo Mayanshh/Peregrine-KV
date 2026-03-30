@@ -1,0 +1,25 @@
+# Local DB data / generated artifacts
+peregrine_data/
+my_data/
+_smoke_data/
+**/*.wal
+**/*.sst
+**/raft_*.log
+**/*.snapshot
+
+# Logs / profiling
+*.log
+*.out
+*.prof
+
+# Build outputs
+server
+dist/
+bin/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+.cursor/
+
