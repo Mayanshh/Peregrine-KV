@@ -45,6 +45,10 @@ type Options struct {
 	TLSCertFile string
 	TLSKeyFile  string
 	TLSCAFile   string
+
+	// Chaos / fault injection knobs (testing only).
+	FaultDropRate float64 // 0.0..1.0
+	FaultDelayMs  int     // artificial latency added to RPC handlers
 }
 
 // DefaultOptions returns a production-lean baseline.
@@ -63,6 +67,8 @@ func DefaultOptions() Options {
 		TLSCertFile:           e.TLSCertFile,
 		TLSKeyFile:            e.TLSKeyFile,
 		TLSCAFile:             e.TLSCAFile,
+		FaultDropRate:        e.FaultDropRate,
+		FaultDelayMs:         e.FaultDelayMs,
 	}
 }
 
@@ -81,6 +87,8 @@ func Open(opts Options) (*DB, error) {
 		TLSCertFile:           opts.TLSCertFile,
 		TLSKeyFile:            opts.TLSKeyFile,
 		TLSCAFile:             opts.TLSCAFile,
+		FaultDropRate:        opts.FaultDropRate,
+		FaultDelayMs:         opts.FaultDelayMs,
 	}
 
 	eng, err := engine.Open(eopts)
@@ -102,7 +110,7 @@ func Open(opts Options) (*DB, error) {
 				return eng.Delete(key)
 			}
 			return eng.Put(key, value)
-		})
+		}, eopts.FaultDropRate, eopts.FaultDelayMs)
 		if err != nil {
 			return nil, err
 		}

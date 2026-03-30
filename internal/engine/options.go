@@ -26,6 +26,10 @@ type Options struct {
 	TLSCertFile string
 	TLSKeyFile  string
 	TLSCAFile   string
+
+	// Chaos / fault injection knobs (for testing and resilience verification).
+	FaultDropRate float64 // 0.0..1.0
+	FaultDelayMs  int     // artificial latency added to RPC handlers
 }
 
 func DefaultOptions() Options {
@@ -42,5 +46,7 @@ func DefaultOptions() Options {
 		TLSCertFile:           "",
 		TLSKeyFile:            "",
 		TLSCAFile:             "",
+		FaultDropRate:        0,
+		FaultDelayMs:         0,
 	}
 }

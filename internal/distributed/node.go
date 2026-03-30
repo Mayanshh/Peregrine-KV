@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand"
 	"net"
 	"os"
 	"path/filepath"
@@ -15,8 +16,10 @@ import (
 
 	"github.com/Mayanshh/Peregrine-KV/internal/clusterpb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 type ApplyFn func(op string, key, value []byte) error
@@ -61,12 +64,17 @@ type Node struct {
 	metrics Metrics
 
 	snapshotEvery uint64
+
+	// Fault injection fields (testing / resilience).
+	faultDropRate float64
+	faultDelayMs  int
 }
 
-func NewNode(dataDir, id, addr string, peers map[string]string, certFile, keyFile, caFile string, apply ApplyFn) (*Node, error) {
+func NewNode(dataDir, id, addr string, peers map[string]string, certFile, keyFile, caFile string, apply ApplyFn, faultDropRate float64, faultDelayMs int) (*Node, error) {
 	if id == "" || addr == "" {
 		return nil, errors.New("raft requires non-empty node id and raft address")
 	}
+	rand.Seed(time.Now().UnixNano())
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return nil, err
 	}
@@ -90,6 +98,8 @@ func NewNode(dataDir, id, addr string, peers map[string]string, certFile, keyFil
 		ctx:     ctx,
 		cancel:  cancel,
 		snapshotEvery: 100,
+		faultDropRate: faultDropRate,
+		faultDelayMs:  faultDelayMs,
 	}
 	if err := n.loadLog(); err != nil {
 		return nil, err
@@ -148,6 +158,12 @@ func (n *Node) Metrics() Metrics {
 }
 
 func (n *Node) RequestVote(ctx context.Context, req *clusterpb.VoteRequest) (*clusterpb.VoteResponse, error) {
+	if n.faultDelayMs > 0 {
+		time.Sleep(time.Duration(n.faultDelayMs) * time.Millisecond)
+	}
+	if n.faultDropRate > 0 && rand.Float64() < n.faultDropRate {
+		return nil, status.Error(codes.Unavailable, "injected raft RequestVote fault")
+	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
@@ -167,6 +183,12 @@ func (n *Node) RequestVote(ctx context.Context, req *clusterpb.VoteRequest) (*cl
 }
 
 func (n *Node) AppendEntries(ctx context.Context, req *clusterpb.AppendEntriesRequest) (*clusterpb.AppendEntriesResponse, error) {
+	if n.faultDelayMs > 0 {
+		time.Sleep(time.Duration(n.faultDelayMs) * time.Millisecond)
+	}
+	if n.faultDropRate > 0 && rand.Float64() < n.faultDropRate {
+		return nil, status.Error(codes.Unavailable, "injected raft AppendEntries fault")
+	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.metrics.AppendRPCs++
@@ -328,8 +350,8 @@ func (n *Node) heartbeatLoop() {
 func (n *Node) replicateWithRetry(_ string, cli clusterpb.RaftClient, idx, term uint64, entry logEntry) bool {
 	cmd, _ := json.Marshal(entry)
 	backoff := 100 * time.Millisecond
-	for i := 0; i < 3; i++ {
-		ctx, cancel := context.WithTimeout(n.ctx, 500*time.Millisecond)
+	for i := 0; i < 5; i++ {
+		ctx, cancel := context.WithTimeout(n.ctx, 700*time.Millisecond)
 		resp, err := cli.AppendEntries(ctx, &clusterpb.AppendEntriesRequest{
 			LeaderId:     n.id,
 			Term:         term,
