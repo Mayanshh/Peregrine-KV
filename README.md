@@ -136,5 +136,5 @@ You should add:
 
 ## License
 
-MIT (or update as needed).
+MIT
 
